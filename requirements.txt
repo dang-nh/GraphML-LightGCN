@@ -1,0 +1,9 @@
+# Working env verified on NVIDIA RTX 5090 (sm_120, driver CUDA 13.1), 2026-07-14.
+# Install torch first from the cu128 index (stable PyPI cu121 wheels lack sm_120 kernels):
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+# Then:
+#   pip install -r requirements.txt
+numpy==2.5.1
+pandas==3.0.3
+scipy==1.18.0
+tqdm==4.68.4
