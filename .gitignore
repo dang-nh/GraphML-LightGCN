@@ -7,3 +7,10 @@ results/*.csv
 results/raw/
 *.npy
 .ipynb_checkpoints/
+report/*.aux
+report/*.log
+report/*.out
+report/*.bbl
+report/*.blg
+report/*.pdf
+report/*.synctex.gz
