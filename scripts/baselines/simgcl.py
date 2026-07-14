@@ -250,6 +250,10 @@ def main():
     pd.DataFrame(rows).to_csv(out_path, index=False)
     print(f'Saved results to {out_path}')
 
+    last = rows[-1]
+    print(f'Final test: Recall@20: {last["recall@20"]} Ndcg@20: {last["ndcg@20"]} '
+          f'Recall@40: {last["recall@40"]} Ndcg@40: {last["ndcg@40"]}')
+
 
 if __name__ == '__main__':
     main()
