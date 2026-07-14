@@ -17,5 +17,16 @@ def parse_args():
     parser.add_argument('--temp', default=0.2, type=float, help='temperature in cl loss')
     parser.add_argument('--lambda2', default=1e-7, type=float, help='l2 reg weight')
     parser.add_argument('--cuda', default='0', type=str, help='the gpu to use')
+    parser.add_argument('--seed', default=0, type=int, help='random seed (torch+numpy+sampler)')
+    # degree-aware curriculum hard-negative sampler (docs/design/sampler_design.md)
+    parser.add_argument('--neg_mode', default='S0', type=str, choices=['S0', 'S1', 'S2', 'S3'],
+                         help='S0=uniform (baseline), S1=pure PPR, S2=fixed mixture, S3=degree-gated curriculum (ours)')
+    parser.add_argument('--ppr_dir', default=None, type=str,
+                         help='dir with ppr_pool_<plo>_<phi>.npy + deg.npy from scripts/precompute_ppr.py, required for S1/S2/S3')
+    parser.add_argument('--band', default='0.05,0.15', type=str, help='p_lo,p_hi band to load from --ppr_dir')
+    parser.add_argument('--Tw', default=10, type=int, help='curriculum warm-up epochs')
+    parser.add_argument('--alpha_bar', default=0.5, type=float, help='S2 fixed global mixture weight')
+    parser.add_argument('--gate_a', default=1.0, type=float, help='S3 degree-gate sigmoid slope')
+    parser.add_argument('--gate_dmid', default=None, type=float, help='S3 degree-gate sigmoid midpoint (default: median degree)')
     return parser.parse_args()
 args = parse_args()

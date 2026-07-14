@@ -75,8 +75,11 @@ class LightGCL(nn.Module):
             E_u_norm = self.E_u
             G_i_norm = self.G_i
             E_i_norm = self.E_i
-            neg_score = torch.log(torch.exp(G_u_norm[uids] @ E_u_norm.T / self.temp).sum(1) + 1e-8).mean()
-            neg_score += torch.log(torch.exp(G_i_norm[iids] @ E_i_norm.T / self.temp).sum(1) + 1e-8).mean()
+            # logsumexp instead of log(exp(.).sum()): the raw exp() overflows to inf once
+            # embedding norms grow (no bound over long unregularized training), and inf/nan
+            # then poisons the total loss even when lambda_1=0 (0 * nan = nan).
+            neg_score = torch.logsumexp(G_u_norm[uids] @ E_u_norm.T / self.temp, dim=1).mean()
+            neg_score += torch.logsumexp(G_i_norm[iids] @ E_i_norm.T / self.temp, dim=1).mean()
             pos_score = (torch.clamp((G_u_norm[uids] * E_u_norm[uids]).sum(1) / self.temp,-5.0,5.0)).mean() + (torch.clamp((G_i_norm[iids] * E_i_norm[iids]).sum(1) / self.temp,-5.0,5.0)).mean()
             loss_s = -pos_score + neg_score
 
@@ -86,7 +89,8 @@ class LightGCL(nn.Module):
             neg_emb = self.E_i[neg]
             pos_scores = (u_emb * pos_emb).sum(-1)
             neg_scores = (u_emb * neg_emb).sum(-1)
-            loss_r = -F.logsigmoid(pos_scores - neg_scores).mean()
+            score_diff = torch.clamp(pos_scores - neg_scores, -20.0, 20.0)
+            loss_r = -F.logsigmoid(score_diff).mean()
 
             # reg loss
             loss_reg = 0

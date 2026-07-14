@@ -51,20 +51,98 @@ def spmm(sp, emb, device):
     return result
 
 class TrnData(data.Dataset):
-    def __init__(self, coomat):
+    """Negative sampler for the BPR loss.
+
+    neg_mode='S0' (default) reproduces the original uniform-random rejection sampler,
+    just vectorized. Modes S1/S2/S3 implement the degree-aware curriculum hard-negative
+    mixture from docs/design/sampler_design.md Section 3:
+        P_t(j|u) = (1 - alpha_{u,t}) * Uniform(j) + alpha_{u,t} * PPR(j|u)
+    S1: alpha_edge = 1 (pure PPR, no curriculum/gate)
+    S2: alpha_edge = s(t) * alpha_bar (global constant)
+    S3: alpha_edge = s(t) * sigmoid(a * (log(1+d_u) - log(1+d_mid)))  (full method)
+    """
+
+    def __init__(self, coomat, neg_mode='S0', ppr_pool=None, deg=None,
+                 alpha_bar=0.5, Tw=10, gate_a=1.0, gate_dmid=None, seed=0):
         self.rows = coomat.row
         self.cols = coomat.col
         self.dokmat = coomat.todok()
         self.negs = np.zeros(len(self.rows)).astype(np.int32)
+        self.n_item = coomat.shape[1]
+        self.n_user = coomat.shape[0]
 
-    def neg_sampling(self):
-        for i in range(len(self.rows)):
-            u = self.rows[i]
-            while True:
-                i_neg = np.random.randint(self.dokmat.shape[1])
-                if (u, i_neg) not in self.dokmat:
-                    break
-            self.negs[i] = i_neg
+        self.neg_mode = neg_mode
+        self.ppr_pool = ppr_pool
+        self.alpha_bar = alpha_bar
+        self.Tw = Tw
+        self.gate_a = gate_a
+        self.rng = np.random.default_rng(seed)
+
+        # vectorized positive-membership test: encode (row, col) as a single int64 and
+        # binary-search a sorted array, instead of a per-sample dict/dok lookup.
+        pos_codes = self.rows.astype(np.int64) * self.n_item + self.cols.astype(np.int64)
+        self.pos_codes_sorted = np.sort(np.unique(pos_codes))
+
+        if neg_mode in ('S1', 'S2', 'S3'):
+            assert ppr_pool is not None, f'{neg_mode} requires a precomputed ppr_pool'
+            assert deg is not None, f'{neg_mode} requires user degrees'
+            self.pool_size = ppr_pool.shape[1]
+        if neg_mode == 'S3':
+            d_mid = gate_dmid if gate_dmid is not None else float(np.median(deg))
+            self.base_u = 1.0 / (1.0 + np.exp(-gate_a * (np.log1p(deg) - np.log1p(d_mid))))
+        else:
+            self.base_u = None
+
+    def _is_positive(self, rows, cols):
+        codes = rows.astype(np.int64) * self.n_item + cols.astype(np.int64)
+        idx = np.searchsorted(self.pos_codes_sorted, codes)
+        idx = np.clip(idx, 0, len(self.pos_codes_sorted) - 1)
+        return self.pos_codes_sorted[idx] == codes
+
+    def _sample_uniform(self, rows):
+        E = len(rows)
+        neg = self.rng.integers(0, self.n_item, size=E).astype(np.int32)
+        bad = self._is_positive(rows, neg)
+        # rejection resampling for the small fraction of collisions (density is low, so
+        # this converges in 1-2 rounds)
+        while bad.any():
+            n_bad = int(bad.sum())
+            neg[bad] = self.rng.integers(0, self.n_item, size=n_bad).astype(np.int32)
+            bad_idx = np.nonzero(bad)[0]
+            still_bad = self._is_positive(rows[bad_idx], neg[bad_idx])
+            bad = np.zeros(E, dtype=bool)
+            bad[bad_idx[still_bad]] = True
+        return neg
+
+    def neg_sampling(self, epoch=0):
+        E = len(self.rows)
+        rows = self.rows
+
+        if self.neg_mode == 'S0':
+            self.negs = self._sample_uniform(rows)
+            return
+
+        s = min(1.0, epoch / self.Tw) if self.Tw > 0 else 1.0
+        if self.neg_mode == 'S1':
+            alpha_edge = np.ones(E)
+        elif self.neg_mode == 'S2':
+            alpha_edge = np.full(E, s * self.alpha_bar)
+        elif self.neg_mode == 'S3':
+            alpha_edge = s * self.base_u[rows]
+        else:
+            raise ValueError(f'unknown neg_mode {self.neg_mode}')
+
+        use_ppr = self.rng.random(E) < alpha_edge
+        neg = np.zeros(E, dtype=np.int32)
+
+        if use_ppr.any():
+            ppr_rows = rows[use_ppr]
+            col_idx = self.rng.integers(0, self.pool_size, size=len(ppr_rows))
+            neg[use_ppr] = self.ppr_pool[ppr_rows, col_idx]
+        if (~use_ppr).any():
+            neg[~use_ppr] = self._sample_uniform(rows[~use_ppr])
+
+        self.negs = neg
 
     def __len__(self):
         return len(self.rows)

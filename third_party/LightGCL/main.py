@@ -12,6 +12,9 @@ from utils import TrnData
 
 device = 'cuda:' + args.cuda
 
+torch.manual_seed(args.seed)
+np.random.seed(args.seed)
+
 # hyperparameters
 d = args.d
 l = args.gnn_layer
@@ -47,7 +50,18 @@ for i in range(len(train.data)):
 
 # construct data loader
 train = train.tocoo()
-train_data = TrnData(train)
+
+ppr_pool, deg = None, None
+if args.neg_mode in ('S1', 'S2', 'S3'):
+    assert args.ppr_dir is not None, f'--neg_mode {args.neg_mode} requires --ppr_dir (see scripts/precompute_ppr.py)'
+    p_lo, p_hi = (float(x) for x in args.band.split(','))
+    ppr_pool = np.load(f'{args.ppr_dir}/ppr_pool_{p_lo:.2f}_{p_hi:.2f}.npy')
+    deg = np.load(f'{args.ppr_dir}/deg.npy')
+    print(f'Loaded PPR pool {ppr_pool.shape} and degrees {deg.shape} from {args.ppr_dir} (band {args.band})')
+
+train_data = TrnData(train, neg_mode=args.neg_mode, ppr_pool=ppr_pool, deg=deg,
+                      alpha_bar=args.alpha_bar, Tw=args.Tw, gate_a=args.gate_a,
+                      gate_dmid=args.gate_dmid, seed=args.seed)
 train_loader = data.DataLoader(train_data, batch_size=args.inter_batch, shuffle=True, num_workers=0)
 
 adj_norm = scipy_sparse_mat_to_torch_sparse_tensor(train)
@@ -96,7 +110,7 @@ for epoch in range(epoch_no):
     epoch_loss = 0
     epoch_loss_r = 0
     epoch_loss_s = 0
-    train_loader.dataset.neg_sampling()
+    train_loader.dataset.neg_sampling(epoch)
     for i, batch in enumerate(tqdm(train_loader)):
         uids, pos, neg = batch
         uids = uids.long().cuda(torch.device(device))
