@@ -3,8 +3,9 @@ __pycache__/
 *.pyc
 third_party/LightGCL/saved_model/*.pt
 third_party/LightGCL/log/*.csv
-results/*.csv
-results/raw/
+results/logs/
+results/ppr/
+results/predictions/
 *.npy
 .ipynb_checkpoints/
 report/*.aux
