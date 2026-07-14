@@ -6,6 +6,7 @@ third_party/LightGCL/log/*.csv
 results/logs/
 results/ppr/
 results/predictions/
+results/peruser/
 *.npy
 .ipynb_checkpoints/
 report/*.aux
