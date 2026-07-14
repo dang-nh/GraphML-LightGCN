@@ -108,6 +108,7 @@ for epoch in range(epoch_no):
         optimizer.zero_grad()
         loss, loss_r, loss_s= model(uids, iids, pos, neg)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
         optimizer.step()
         #print('batch',batch)
         epoch_loss += loss.cpu().item()

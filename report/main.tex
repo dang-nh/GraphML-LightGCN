@@ -1,0 +1,171 @@
+\documentclass{article}
+\usepackage[final]{neurips_2024}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{amsmath}
+
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+
+\title{Degree-Aware Curriculum Hard-Negative Sampling for LightGCL}
+
+\author{
+  Ngo Hoang Dang \quad Mai Duc Phuc \quad Nguyen Hoang Dang \quad Nguyen Kim Tuyen \quad Mai Hoang Long\\
+  Graph Analytics for Big Data (IT5429E) --- Class Project Report
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+LightGCL (ICLR 2023) is a graph contrastive learning model for recommendation that
+contrasts a LightGCN view of the user--item graph with an SVD-reconstructed view, yet its
+ranking objective still relies on uniformly sampled negative items in the BPR loss. We
+propose a degree-aware curriculum hard-negative sampler for this BPR component: negatives
+are drawn from a mixture of a uniform distribution and a Personalized-PageRank (PPR)
+hard-negative distribution, whose mixture weight grows with training progress (curriculum)
+and with each user's activity level (degree), so that sparse users keep mostly random
+negatives, limiting false-negative bias. We evaluate on Yelp2018 with Recall@20 and
+NDCG@20 against MF-BPR, LightGCN, SimGCL, and LightGCL, including a sampling-strategy
+ablation and a user-degree-bucket breakdown. \todo{fill in one-line headline result once
+final runs complete.}
+\end{abstract}
+
+\section{Introduction}
+\todo{Short intro paragraph: motivate false-negative bias in uniform BPR sampling for
+sparse implicit-feedback graphs, restate the research question.}
+
+\textbf{Research question.} Does a hard-negative curriculum modulated by user activity
+improve the recommendation accuracy and long-tail robustness of LightGCL without
+increasing false-negative bias?
+
+\section{Application domain: dataset, task, and metrics}
+
+\paragraph{Dataset.} We use Yelp2018, an implicit-feedback recommendation benchmark of
+user check-ins at local businesses, using the exact train/test splits shipped with the
+official LightGCL repository~\cite{lightgcl}. \textbf{Note:} the statistics below are
+measured directly from that shipped data, which differs from the proposal draft's Table~1
+(31{,}668 users / 38{,}048 items) --- see Appendix~\ref{app:dataset-note} for the
+discrepancy.
+
+\begin{table}[h]
+\centering
+\caption{Statistics of the datasets actually used (measured from the shipped splits).}
+\label{tab:dataset-stats}
+\begin{tabular}{lrrrrr}
+\toprule
+Dataset & \#Users & \#Items & Train & Test & Density \\
+\midrule
+Yelp2018 (primary) & 29{,}601 & 24{,}734 & 1{,}069{,}128 & 305{,}466 & 0.188\% \\
+Gowalla (time-permitting) & 50{,}821 & 57{,}440 & 1{,}172{,}425 & 130{,}270 & 0.045\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Task and metrics.} Top-$K$ recommendation from implicit feedback: given the
+bipartite user--item interaction graph, rank all items a user has not interacted with and
+recommend the top $K$. We report Recall@20 and NDCG@20 under the standard full-ranking
+protocol, averaged over test users, plus a breakdown by user-degree bucket
+(head/mid/tail, tertiles by training-interaction count; see Section~\ref{sec:method}).
+
+\section{Method}
+\label{sec:method}
+
+\subsection{Base model and BPR objective}
+\todo{Restate LightGCN encoder (Eq. 1) and BPR loss (Eq. 2) from the proposal, unchanged
+from the official implementation.}
+
+\subsection{LightGCL: SVD-guided graph contrastive learning}
+\todo{Restate LightGCL's SVD view and InfoNCE loss (Eq. 3), noting we only modify the BPR
+negative sampler.}
+
+\subsection{Proposed: degree-aware curriculum hard-negative sampling}
+\todo{Restate PPR hard-negative candidate construction (Eq. 4) and the degree-aware
+curriculum mixture (Eqs. 5--6), referencing the implementation design in
+\texttt{docs/design/sampler\_design.md}.}
+
+\section{Experimental setup}
+
+\paragraph{Baselines.} MF-BPR, LightGCN, SimGCL, and LightGCL. MF-BPR and LightGCN are
+obtained as ablations of the same LightGCL codebase (\texttt{--gnn\_layer 0 --lambda1 0}
+and \texttt{--lambda1 0} respectively, since LightGCL's ranking score is computed purely
+from its LightGCN branch --- the SVD view only feeds the contrastive loss). SimGCL is
+implemented separately (\texttt{scripts/baselines/simgcl.py}) since it requires
+noise-perturbation-based augmentation rather than an SVD view.
+
+\paragraph{Ablation.} S0 (uniform, baseline) / S1 (pure PPR hard negatives) / S2 (fixed
+global mixture) / S3 (degree-gated curriculum mixture, our full method), per Table~2 of
+the proposal.
+
+\paragraph{Protocol.} \todo{state final seed count / screening grid actually run, once
+known --- see \texttt{docs/design/sampler\_design.md} Section 7 for the planned protocol
+and cut-list under the 3-day time budget.}
+
+\paragraph{Implementation notes / deviations.} \todo{document any hyperparameter fixes
+found necessary for training stability, e.g. MF-BPR's default (lr=1e-3, $\lambda_2$=1e-7)
+diverges to NaN by epoch $\sim$10--17 for this codebase's plain-MF ablation (no graph
+smoothing to bound embedding scale, and no LR decay actually wired into the training loop
+despite the \texttt{--decay} flag); stabilized with lr=1e-4, $\lambda_2$=1e-5, and global
+gradient-norm clipping (max\_norm=5) added to the shared training loop, plus a
+numerically-stable \texttt{logsigmoid} BPR loss (was \texttt{sigmoid().log()}, which
+produces $-\infty$ under score divergence).}
+
+\section{Results}
+\todo{Main table: Recall@20/NDCG@20 mean$\pm$std for MF-BPR, LightGCN, SimGCL, LightGCL(S0),
+best-of-S1--S3, on Yelp2018.}
+
+\subsection{Ablation: sampling strategy}
+\todo{S0 vs S1 vs S2 vs S3 table + discussion. Highlight the monotone trend if present;
+if S1 (pure PPR) underperforms S0 but S3 recovers/beats it, call this out explicitly as
+support for the false-negative-bias hypothesis, not a failure.}
+
+\subsection{Degree-bucket breakdown}
+\todo{head/mid/tail Recall@20/NDCG@20 table for S0 vs best S1--S3, this is the core
+long-tail-robustness claim.}
+
+\section{Discussion}
+\todo{Interpret results against the research question. Address effect size vs. seed noise
+honestly if seeds are few.}
+
+\section{Conclusion}
+\todo{One-paragraph summary.}
+
+\bibliographystyle{plain}
+\begin{thebibliography}{9}
+\bibitem{bpr} S. Rendle, C. Freudenthaler, Z. Gantner, and L. Schmidt-Thieme. BPR:
+Bayesian personalized ranking from implicit feedback. In UAI, 2009.
+\bibitem{lightgcn} X. He, K. Deng, X. Wang, Y. Li, Y. Zhang, and M. Wang. LightGCN:
+Simplifying and powering graph convolution network for recommendation. In SIGIR, 2020.
+\bibitem{pinsage} R. Ying, R. He, K. Chen, P. Eksombatchai, W. L. Hamilton, and J.
+Leskovec. Graph convolutional neural networks for web-scale recommender systems. In KDD,
+2018.
+\bibitem{lightgcl} X. Cai, C. Huang, L. Xia, and X. Ren. LightGCL: Simple yet effective
+graph contrastive learning for recommendation. In ICLR, 2023.
+\bibitem{simgcl} J. Yu, H. Yin, X. Xia, T. Chen, L. Cui, and Q. V. H. Nguyen. Are graph
+augmentations necessary? Simple graph contrastive learning for recommendation. In SIGIR,
+2022.
+\bibitem{curriculum} Y. Bengio, J. Louradour, R. Collobert, and J. Weston. Curriculum
+learning. In ICML, 2009.
+\end{thebibliography}
+
+\appendix
+\section{Note on dataset statistics discrepancy}
+\label{app:dataset-note}
+The project proposal's Table~1 reported Yelp2018 as 31{,}668 users / 38{,}048 items /
+1{,}561{,}406 interactions (0.130\% density), sourced from the original LightGCN paper's
+benchmark description. The data that actually ships with the official LightGCL
+repository~\cite{lightgcl} (which the proposal itself specifies as the data source, "so
+no extra preprocessing is required") has different statistics, reported in
+Table~\ref{tab:dataset-stats}. We use the shipped data as-is, per the proposal's own
+methodology, and report the measured statistics rather than the proposal draft's.
+
+\end{document}
