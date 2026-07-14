@@ -25,6 +25,29 @@ def metrics(uids, predictions, topk, test_labels):
             user_num+=1
     return all_recall/user_num, all_ndcg/user_num
 
+
+def metrics_peruser(uids, predictions, topk, test_labels):
+    """Like metrics(), but returns per-user recall/ndcg arrays (NaN for users with no
+    test items) instead of a single aggregate, for degree-bucket breakdown analysis."""
+    recall = np.full(len(uids), np.nan)
+    ndcg = np.full(len(uids), np.nan)
+    for i in range(len(uids)):
+        uid = uids[i]
+        prediction = list(predictions[i][:topk])
+        label = test_labels[uid]
+        if len(label) > 0:
+            hit = 0
+            idcg = np.sum([np.reciprocal(np.log2(loc + 2)) for loc in range(min(topk, len(label)))])
+            dcg = 0
+            for item in label:
+                if item in prediction:
+                    hit += 1
+                    loc = prediction.index(item)
+                    dcg = dcg + np.reciprocal(np.log2(loc + 2))
+            recall[i] = hit / len(label)
+            ndcg[i] = dcg / idcg
+    return recall, ndcg
+
 def scipy_sparse_mat_to_torch_sparse_tensor(sparse_mx):
     sparse_mx = sparse_mx.tocoo().astype(np.float32)
     indices = torch.from_numpy(

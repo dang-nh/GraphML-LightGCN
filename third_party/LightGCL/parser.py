@@ -28,5 +28,7 @@ def parse_args():
     parser.add_argument('--alpha_bar', default=0.5, type=float, help='S2 fixed global mixture weight')
     parser.add_argument('--gate_a', default=1.0, type=float, help='S3 degree-gate sigmoid slope')
     parser.add_argument('--gate_dmid', default=None, type=float, help='S3 degree-gate sigmoid midpoint (default: median degree)')
+    parser.add_argument('--peruser_out', default=None, type=str,
+                         help='if set, save per-user Recall@20/Ndcg@20 + degree on the final test to this CSV path (for degree-bucket analysis)')
     return parser.parse_args()
 args = parse_args()

@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import pickle
 from model import LightGCL
-from utils import metrics, scipy_sparse_mat_to_torch_sparse_tensor
+from utils import metrics, metrics_peruser, scipy_sparse_mat_to_torch_sparse_tensor
 import pandas as pd
 from parser import args
 from tqdm import tqdm
@@ -183,6 +183,7 @@ all_recall_20 = 0
 all_ndcg_20 = 0
 all_recall_40 = 0
 all_ndcg_40 = 0
+peruser_recall20, peruser_ndcg20 = [], []
 for batch in range(batch_no):
     start = batch*batch_user
     end = min((batch+1)*batch_user,len(test_uids))
@@ -200,9 +201,22 @@ for batch in range(batch_no):
     all_ndcg_20+=ndcg_20
     all_recall_40+=recall_40
     all_ndcg_40+=ndcg_40
+
+    if args.peruser_out is not None:
+        r20, n20 = metrics_peruser(test_uids[start:end], predictions, 20, test_labels)
+        peruser_recall20.append(r20)
+        peruser_ndcg20.append(n20)
     #print('batch',batch,'recall@20',recall_20,'ndcg@20',ndcg_20,'recall@40',recall_40,'ndcg@40',ndcg_40)
 print('-------------------------------------------')
 print('Final test:','Recall@20:',all_recall_20/batch_no,'Ndcg@20:',all_ndcg_20/batch_no,'Recall@40:',all_recall_40/batch_no,'Ndcg@40:',all_ndcg_40/batch_no)
+
+if args.peruser_out is not None:
+    r20 = np.concatenate(peruser_recall20)
+    n20 = np.concatenate(peruser_ndcg20)
+    peruser_df = pd.DataFrame({'user': test_uids, 'degree': rowD[test_uids].astype(int),
+                                'recall@20': r20, 'ndcg@20': n20})
+    peruser_df.to_csv(args.peruser_out, index=False)
+    print(f'Saved per-user metrics to {args.peruser_out}')
 
 recall_20_x.append('Final')
 recall_20_y.append(all_recall_20/batch_no)
