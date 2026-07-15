@@ -4,6 +4,19 @@ import torch.nn as nn
 import torch.utils.data as data
 
 def metrics(uids, predictions, topk, test_labels):
+    """Full-ranking Recall@topk / NDCG@topk, averaged over users with >=1 test item.
+
+    Args:
+        uids: array of user ids in this batch.
+        predictions: (batch, n_item) item ids sorted by descending predicted score
+            (train items already masked out), as produced by ``model(..., test=True)``.
+        topk: cutoff K (e.g. 20).
+        test_labels: list indexed by user id of held-out test item ids.
+
+    Returns:
+        (recall, ndcg): aggregate Recall@K and NDCG@K, each averaged over users with
+        at least one test item (users with no test items do not contribute).
+    """
     user_num = 0
     all_recall = 0
     all_ndcg = 0
