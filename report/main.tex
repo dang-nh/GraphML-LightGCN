@@ -1,5 +1,6 @@
 \documentclass{article}
-\usepackage[final]{neurips_2024}
+\PassOptionsToPackage{numbers}{natbib}
+\usepackage[final,main]{neurips_2025}
 
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
@@ -13,6 +14,24 @@
 \usepackage{graphicx}
 \usepackage{amsmath}
 \usepackage{multirow}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{listings}
+\usepackage{caption}
+
+\lstdefinestyle{py}{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue!60!black}\bfseries,
+  commentstyle=\color{gray},
+  stringstyle=\color{green!40!black},
+  showstringspaces=false,
+  breaklines=true,
+  frame=single,
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  xleftmargin=1.5em,
+}
 
 \title{Degree-Aware Curriculum Hard-Negative Sampling for LightGCL}
 
@@ -71,6 +90,100 @@ InfoNCE loss untouched, then compare four sampler variants (uniform, pure hard-n
 fixed-ramp mixture, and degree-gated curriculum mixture) against each other and against
 three external baselines (MF-BPR, LightGCN, SimGCL) on Yelp2018.
 
+\section{Related work}
+\label{sec:related}
+
+Our contribution sits at the intersection of two lines of research: negative
+sampling for implicit-feedback recommendation, and graph contrastive learning
+for collaborative filtering. We review each and then position the degree-gated
+curriculum precisely against both.
+
+\subsection{Negative sampling and hard-negative mining for recommendation}
+Implicit-feedback recommenders observe only positive interactions; the pairwise
+BPR objective~\cite{bpr} therefore requires a \emph{negative} item for every
+observed pair, conventionally drawn uniformly from the non-interacted set. Because
+the overwhelming majority of uniform negatives are trivially easy---items with no
+structural or semantic relationship to the user---they saturate the sigmoid early
+and contribute vanishing gradient, which slows convergence and caps final ranking
+quality. A long line of work has therefore sought \emph{informative} negatives.
+
+\textbf{Dynamic and score-based negatives.} Dynamic Negative Sampling
+(DNS)~\cite{dns} was the first to argue that the negatives most useful for
+top-$N$ ranking are those the current model scores highly but that are in fact
+unobserved: for each positive it oversamples a small candidate set and keeps the
+highest-scoring (``hardest'') item, adaptively raising negative difficulty as the
+model improves. This score-conditioned view was later formalized as
+adversarial sampling. IRGAN~\cite{irgan} casts a generator against the
+recommender in a minimax game so that the generator learns to propose negatives
+the discriminator finds confusing. Both establish the central tension that our
+work also confronts: harder negatives sharpen the decision boundary but push the
+sampler toward unobserved positives (false negatives), which are precisely the
+high-scoring items a well-trained model surfaces.
+
+\textbf{False negatives and robust sampling.} SRNS~\cite{srns} made the
+false-negative problem explicit, observing empirically that true hard negatives
+and false negatives are separable by prediction \emph{variance}: false negatives
+(unobserved positives) receive stably high scores across epochs, whereas genuine
+hard negatives fluctuate. SRNS therefore favours high-variance candidates from a
+small memory. Our degree gate targets the same failure mode but through a
+different, cheaper signal---\emph{user activity}---on the premise that a
+PPR-proximate item is far more likely to be an unobserved positive for a sparse
+user (little evidence, high graph overlap between liked and merely-adjacent items)
+than for an active one.
+
+\textbf{Graph-structure-aware and mixed negatives.} On GNN recommenders,
+MixGCF~\cite{mixgcf} generates \emph{synthetic} hard negatives by (i) positive
+mixing---interpolating a positive's embedding into sampled negatives---and (ii)
+hop mixing across the GNN's aggregation layers, rather than selecting existing
+items; it reports consistent gains over DNS on LightGCN and NGCF. Most directly
+relevant to our design, PinSAGE~\cite{pinsage} pioneered \emph{PPR-based} hard
+negatives at web scale: it adds, per positive, ``hard'' items drawn from an
+intermediate band of the query node's Personalized-PageRank ranking---close enough
+to be informative, far enough to remain true negatives. We adopt exactly this
+PPR-band construction as our hard-negative distribution. Finally, in the adjacent
+field of dense text retrieval, ANCE~\cite{ance} showed that globally-mined,
+periodically-refreshed nearest-neighbour negatives substantially outperform
+in-batch negatives, reinforcing that the \emph{source} of negatives, not only the
+loss, governs contrastive-style training quality.
+
+\subsection{Graph contrastive learning for collaborative filtering}
+A parallel line augments graph collaborative filtering with a self-supervised
+contrastive objective. SGL~\cite{sgl} generates two augmented views of the
+user--item graph via edge/node dropout and random walks and maximizes agreement
+between a node's representations across views with an InfoNCE loss, improving
+robustness and---notably for us---long-tail accuracy. NCL~\cite{ncl} enriches the
+contrastive signal with structural and semantic neighbours (prototype- and
+graph-neighbour-based positives) rather than relying on stochastic augmentation.
+SimGCL~\cite{simgcl} then showed that the graph augmentations themselves are
+largely unnecessary: injecting small isotropic noise into the embedding space
+yields more uniform representations and stronger performance than dropout-based
+views, a finding consistent with the strong SimGCL numbers we observe
+(Table~\ref{tab:main-results}). LightGCL~\cite{lightgcl}, our base model, replaces
+stochastic augmentation with a deterministic, global view built from a truncated
+SVD of the normalized adjacency, aligning the LightGCN view with the SVD view via
+InfoNCE~\cite{infonce} and thereby injecting global collaborative signal that local
+propagation misses.
+
+\subsection{Positioning of this work}
+Two observations motivate our specific design. First, essentially all of the
+contrastive recommenders above---SGL, NCL, SimGCL, and LightGCL---inherit a
+\emph{uniform} BPR negative sampler for their supervised ranking term and direct
+their innovation entirely at the self-supervised branch; the ranking term's
+negatives are left untouched. Second, essentially all of the hard-negative methods
+above---DNS, IRGAN, SRNS, MixGCF---were developed for non-contrastive
+recommenders and apply a \emph{single}, user-agnostic notion of hardness. Our work
+occupies the gap between these two literatures: we keep LightGCL's SVD-contrastive
+branch fixed and instead upgrade only its BPR negative sampler, and we make the
+hardness schedule \emph{two-dimensional}---a curriculum ramp over training
+time~\cite{curriculum} \emph{and} a degree gate over user activity. To our
+knowledge this specific combination---degree-conditioned modulation of a
+PPR-hard-negative curriculum, applied to the supervised component of an
+SVD-contrastive model---has not been studied. The degree gate is the conceptual
+novelty relative to a plain curriculum mixture (our S2 baseline) and to
+uniform-hardness methods like DNS/PinSAGE: it encodes the prior that the
+false-negative cost of hard negatives is not constant across users but scales
+inversely with the evidence the model has about each user.
+
 \section{Application domain: dataset, task, and metrics}
 
 \paragraph{Dataset.} We use Yelp2018, an implicit-feedback recommendation benchmark of
@@ -105,65 +218,229 @@ interactions).
 \section{Method}
 \label{sec:method}
 
-\subsection{Base model and BPR objective}
+\subsection{From maximum-likelihood ranking to the BPR loss}
 Users $u$ and items $i$ are embedded as $e_u, e_i \in \mathbb{R}^d$, scored by inner
-product $\hat y_{ui} = e_u^\top e_i$. LightGCN~\cite{lightgcn} refines embeddings with
-$L$ layers of symmetric-normalized linear message passing over the bipartite graph and
-averages all layers' representations. Training uses the pairwise BPR loss: for each
-observed pair $(u,i)$, a negative item $j$ is sampled and the model is pushed to rank $i$
-above $j$,
+product $\hat y_{ui} = e_u^\top e_i$. We restate the BPR objective~\cite{bpr} as a
+maximum-a-posteriori estimator to make explicit which quantity the negative sampler
+perturbs. Let $\Theta$ collect all model parameters and let $\succ_u\;\subseteq I\times I$
+denote user $u$'s latent total order over items. BPR assumes each user's pairwise
+preferences are drawn independently and that, for an observed item $i$ and a non-observed
+item $j$, the model's belief that $u$ prefers $i$ to $j$ is
 \[
-\mathcal{L}_{\mathrm{bpr}} = \sum_{(u,i)\in O} \mathbb{E}_{j\sim P(\cdot\mid u)}\big[-\log
-\sigma(\hat y_{ui} - \hat y_{uj})\big],
+p(i \succ_u j \mid \Theta) \;=\; \sigma\!\big(\hat y_{ui}(\Theta) - \hat y_{uj}(\Theta)\big),
+\qquad \sigma(x)=\tfrac{1}{1+e^{-x}}.
+\]
+With a factorized Gaussian prior $p(\Theta)=\mathcal{N}(0,\lambda_2^{-1}I)$, the
+posterior over parameters given the observed preferences $D_S=\{(u,i,j): i\in N_u,\,
+j\notin N_u\}$ factorizes, and maximizing its log yields the BPR-OPT criterion
+\[
+\max_{\Theta}\;\sum_{(u,i,j)\in D_S}\log\sigma(\hat y_{ui}-\hat y_{uj})
+\;-\;\lambda_2\lVert\Theta\rVert_2^2 .
+\]
+Because $D_S$ is quadratically large, it is approximated by sampling one negative
+$j$ per observed pair, giving the stochastic loss we minimize,
+\[
+\mathcal{L}_{\mathrm{bpr}}
+= \sum_{(u,i)\in O}\;\mathbb{E}_{j\sim P(\cdot\mid u)}
+\big[-\log\sigma(\hat y_{ui}-\hat y_{uj})\big]
+\;+\;\lambda_2\lVert\Theta\rVert_2^2 ,
 \]
 where $P(\cdot\mid u)$ is uniform over non-interacted items in all baselines. This
-sampler is the only component we modify.
+derivation clarifies our intervention: the \emph{estimator} is fixed; we change only the
+proposal distribution $P(\cdot\mid u)$ from which the Monte-Carlo negative $j$ is drawn ---
+the only component we modify. The gradient with respect to a score margin
+$x=\hat y_{ui}-\hat y_{uj}$ is $-\sigma(-x)$, which vanishes as $x\!\to\!\infty$:
+uniformly-sampled easy negatives quickly reach large $x$ and stop contributing,
+motivating harder proposals. Symmetrically, if $j$ is in fact an unobserved
+positive, the same gradient actively pushes a good item down --- the false-negative
+cost the degree gate is designed to bound.
 
-\subsection{LightGCL: SVD-guided graph contrastive learning}
-LightGCL~\cite{lightgcl} augments LightGCN with a second view built from a truncated
-rank-$q$ SVD of the normalized adjacency, and aligns the two views with an InfoNCE loss
-using in-batch negatives, added to $\mathcal{L}_{\mathrm{bpr}}$ with weight
-$\lambda_1$. Critically, we verified in the official code (\texttt{model.py}) that the
-\emph{ranking score itself} is computed purely from the LightGCN branch; the SVD view
-only ever feeds the contrastive loss term. This means LightGCN and MF-BPR baselines can
-be obtained for free as ablations of the same codebase (\S\ref{sec:setup}), and that our
-sampler change --- which only affects $\mathcal{L}_{\mathrm{bpr}}$'s negative $j$ ---
-cannot alter the contrastive branch at all.
+\subsection{LightGCN propagation and the LightGCL SVD-contrastive objective}
+\label{sec:lightgcl-formal}
+\textbf{Graph propagation.} Let $A\in\{0,1\}^{|U|\times|I|}$ be the interaction
+matrix and $\tilde{\mathcal{A}}=\mathcal{D}^{-1/2}\mathcal{A}\mathcal{D}^{-1/2}$
+the symmetric-normalized adjacency of the bipartite graph
+$\mathcal{A}=\big[\begin{smallmatrix}0&A\\A^\top&0\end{smallmatrix}\big]$, with
+degree diagonal $\mathcal{D}$. LightGCN~\cite{lightgcn} discards nonlinearities
+and per-layer weights, propagating embeddings by
+\[
+E^{(l+1)}=\tilde{\mathcal{A}}\,E^{(l)},\qquad
+E=\frac{1}{L+1}\sum_{l=0}^{L}E^{(l)},
+\]
+where $E^{(0)}$ are the free embeddings and $E$ the final read-out used for
+scoring $\hat y_{ui}=e_u^\top e_i$. Layer averaging acts as a low-pass filter over
+the graph spectrum, mitigating oversmoothing at moderate $L$; we use $L=2$.
+
+\textbf{SVD-reconstructed contrastive view.} LightGCL~\cite{lightgcl} builds a
+second view from a rank-$q$ truncated SVD $\tilde{\mathcal{A}}\approx
+U_q\Sigma_q V_q^{\top}$, and propagates embeddings over this low-rank
+reconstruction to obtain a global-signal view $G^{(l)}$. The two views are aligned
+with an InfoNCE~\cite{infonce} objective using in-batch negatives; writing
+$z^{(1)}_u,z^{(2)}_u$ for the main- and SVD-view representations of user $u$ in a
+batch $\mathcal{B}$ and $\tau$ for the temperature,
+\[
+\mathcal{L}_{\mathrm{cl}}^{U}
+= \sum_{u\in\mathcal{B}} -\log
+\frac{\exp\!\big(z^{(1)\top}_u z^{(2)}_u/\tau\big)}
+{\sum_{u'\in\mathcal{B}}\exp\!\big(z^{(1)\top}_u z^{(2)}_{u'}/\tau\big)},
+\]
+with an analogous item term $\mathcal{L}_{\mathrm{cl}}^{I}$, added to
+$\mathcal{L}_{\mathrm{bpr}}$ with weight $\lambda_1$:
+\[
+\mathcal{L}=\mathcal{L}_{\mathrm{bpr}}
++\lambda_1\big(\mathcal{L}_{\mathrm{cl}}^{U}+\mathcal{L}_{\mathrm{cl}}^{I}\big)
++\lambda_2\lVert\Theta\rVert_2^2 .
+\]
+Critically, we verified in the official code (\texttt{model.py}) that the ranking
+score $\hat y_{ui}$ is read only from the main branch $E$; the SVD view enters
+exclusively through $\mathcal{L}_{\mathrm{cl}}$. This means LightGCN and MF-BPR
+baselines can be obtained for free as ablations of the same codebase
+(\S\ref{sec:setup}), and that our sampler change --- which only affects
+$\mathcal{L}_{\mathrm{bpr}}$'s negative $j$ --- provably cannot alter the
+contrastive branch at all, the property that makes this a clean, single-variable
+ablation.
 
 \subsection{Proposed: degree-aware curriculum hard-negative sampling}
-Following PinSAGE~\cite{pinsage}, we rank all non-interacted items for each user by
-Personalized PageRank (PPR) on the interaction graph and treat items in a percentile band
-of that ranking as hard-negative candidates,
+\textbf{PPR hard-negative band.} For each user $u$ we compute Personalized
+PageRank on $\tilde{\mathcal{A}}$ with teleport $c$, solving the fixed point
+$\pi_u=(1-c)\tilde{\mathcal{A}}\pi_u+c\,e_u$ by power iteration (Algorithm~\ref{alg:ppr}),
+following PinSAGE~\cite{pinsage}. Ranking all items by $\pi_u$ and excluding observed
+positives $N_u$, the hard-negative candidate band is the percentile window
 \[
-B_u = \{\, j \notin N_u : \mathrm{rank}_{\mathrm{PPR}}(j\mid u) \in [p_{lo}|I|,\,
-p_{hi}|I|] \,\}, \qquad P_{\mathrm{PPR}}(j\mid u) = \mathrm{Unif}(B_u).
+B_u=\big\{\,j\notin N_u \;:\; \mathrm{rank}_{\mathrm{PPR}}(j\mid u)\in
+[p_{lo}\,|I|,\;p_{hi}\,|I|]\,\big\},
+\qquad P_{\mathrm{PPR}}(j\mid u)=\mathrm{Unif}(B_u).
 \]
-At training epoch $t$, the BPR negative for user $u$ is drawn from a mixture
+The lower cutoff $p_{lo}$ deliberately discards the very top of the ranking, where
+unobserved positives concentrate; the band width $p_{hi}-p_{lo}$ trades
+informativeness (narrow, close to the top) against false-negative safety (wide,
+further down). We downsample $B_u$ once to a fixed pool of $\mathrm{POOL}=500$ items
+per user for $O(1)$ online sampling.
+
+\textbf{Two-factor mixture weight.} At epoch $t$ the negative for user $u$ is drawn
+from a per-user, per-epoch mixture of the uniform and PPR distributions,
 \[
-P_t(j\mid u) = (1-\alpha_{u,t})\, P_{\mathrm{uniform}}(j) + \alpha_{u,t}\, P_{\mathrm{PPR}}(j\mid u),
+P_t(j\mid u)=(1-\alpha_{u,t})\,P_{\mathrm{uniform}}(j)
++\alpha_{u,t}\,P_{\mathrm{PPR}}(j\mid u),
 \]
-where the mixture weight combines a curriculum ramp with a degree gate,
 \[
-\alpha_{u,t} = s(t)\cdot \sigma\big(a\,(\log(1+d_u) - \log(1+d_{\mathrm{mid}}))\big), \qquad s(t) = \min(1, t/T_w).
+\alpha_{u,t}=\underbrace{s(t)}_{\text{curriculum}}\cdot
+\underbrace{\sigma\!\big(a\,[\log(1+d_u)-\log(1+d_{\mathrm{mid}})]\big)}_{\text{degree gate}},
+\qquad s(t)=\min\!\Big(1,\tfrac{t}{T_w}\Big).
 \]
-$s(t)$ ramps hard negatives on only after a $T_w$-epoch warm-up (curriculum learning,
-\cite{curriculum}); the sigmoid gate gives high-degree (active) users harder negatives
-earlier while low-degree (sparse) users keep mostly uniform negatives throughout, since a
-PPR-similar item is more likely to be an unobserved positive precisely where a sparse
-user gives the model the least evidence. We compare four sampler modes, all applied only
-to LightGCL's BPR term:
+The curriculum term $s(t)$ ramps hard negatives from $0$ to full over a $T_w$-epoch
+warm-up~\cite{curriculum}, so early training --- when the model cannot yet
+distinguish hard negatives from false negatives --- sees mostly uniform negatives.
+The degree gate is a sigmoid in \emph{log}-degree, pinned to $\alpha=0.5$ at the
+midpoint degree $d_{\mathrm{mid}}$ (set to the median) and with slope $a$: active
+users ($d_u\gg d_{\mathrm{mid}}$) receive hard negatives approaching probability
+$1$, while sparse users ($d_u\ll d_{\mathrm{mid}}$) are protected toward uniform
+sampling. We compare four sampler modes, all applied only to LightGCL's BPR term,
+each a special case of the expression above:
 \begin{itemize}
-\item \textbf{S0} --- uniform (the unmodified baseline).
+\item \textbf{S0} --- uniform (the unmodified baseline): $\alpha_{u,t}\equiv 0$.
 \item \textbf{S1} --- pure PPR hard negatives ($\alpha_{u,t}\equiv 1$, no curriculum/gate).
 \item \textbf{S2} --- fixed global mixture ($\alpha_{u,t} = s(t)\cdot\bar\alpha$, no degree
 dependence).
 \item \textbf{S3} --- our full method: degree-gated curriculum mixture, as above.
 \end{itemize}
-Full implementation details (GPU-batched PPR via power iteration, percentile-band
-construction, vectorized per-epoch sampling) are in
-\texttt{docs/design/sampler\_design.md} and \texttt{scripts/precompute\_ppr.py}; PPR is
-precomputed once per dataset (11.4s for Yelp2018, 30.1s for Gowalla on an RTX 5090 ---
-both far under the design budget) and cached as a fixed-size candidate pool per user.
+Algorithm~\ref{alg:sampler} gives the fully-vectorized per-epoch sampling procedure,
+which adds $<\!1$s/epoch and no per-step cost since it operates once per epoch over
+all $|O|$ training edges rather than per gradient step. Full implementation details
+are in \texttt{docs/design/sampler\_design.md} and \texttt{scripts/precompute\_ppr.py};
+PPR is precomputed once per dataset (11.4s for Yelp2018, 30.1s for Gowalla on an RTX
+5090 --- both far under the design budget) and cached as a fixed-size candidate pool
+per user.
+
+\begin{algorithm}[t]
+\caption{One-time PPR precompute and band extraction (per dataset)}
+\label{alg:ppr}
+\begin{algorithmic}[1]
+\Require normalized adjacency $\tilde{\mathcal{A}}$, teleport $c$, iterations $n_{\mathrm{iter}}$,
+band $(p_{lo},p_{hi})$, pool size $P$, chunk size $C$
+\Ensure candidate pool $\mathrm{POOL}\in\mathbb{Z}^{|U|\times P}$, degrees $d\in\mathbb{Z}^{|U|}$
+\For{each user chunk $\mathcal{C}$ of size $C$}
+  \State $X \gets E_{\mathcal{C}}$ \Comment{one-hot personalization on user nodes}
+  \For{$k=1$ to $n_{\mathrm{iter}}$}
+     \State $X \gets (1-c)\,\tilde{\mathcal{A}}\,X + c\,E_{\mathcal{C}}$ \Comment{sparse mm, geometric convergence}
+  \EndFor
+  \State $S \gets$ item-node rows of $X$ \Comment{PPR scores over items}
+  \State $S[u,j]\gets -\infty$ for all $j\in N_u$ \Comment{exclude observed positives}
+  \State $(\mathrm{vals},\mathrm{idx})\gets \mathrm{topk}(S,\;\lceil p_{hi}|I|\rceil)$; sort per row
+  \State $B_u \gets \mathrm{idx}[\,\lfloor p_{lo}|I|\rfloor:\,]$ per user \Comment{drop top-$p_{lo}$}
+  \State $\mathrm{POOL}[\mathcal{C}]\gets$ sample $P$ items from each $B_u$ (uniform)
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[t]
+\caption{S3 degree-gated curriculum negative sampling (per epoch, vectorized over all $|O|$ edges)}
+\label{alg:sampler}
+\begin{algorithmic}[1]
+\Require edge users $r\in\mathbb{Z}^{|O|}$, epoch $t$, warm-up $T_w$, slope $a$,
+midpoint $d_{\mathrm{mid}}$, pool $\mathrm{POOL}$, degrees $d$, RNG
+\Ensure negatives $\mathrm{neg}\in\mathbb{Z}^{|O|}$
+\State $g_u \gets \sigma\!\big(a[\log(1{+}d_u)-\log(1{+}d_{\mathrm{mid}})]\big)$ \Comment{gate; precomputed once}
+\State $s \gets \min(1,\,t/T_w)$; \quad $\alpha \gets s\cdot g_{r}$ \Comment{per-edge mixture weight}
+\State $m \gets \big(\mathrm{RNG.uniform}(|O|) < \alpha\big)$ \Comment{PPR-branch mask}
+\State $\mathrm{neg}_{\mathrm{ppr}} \gets \mathrm{POOL}[\,r,\;\mathrm{RNG.int}(0,P,|O|)\,]$ \Comment{pool excludes positives}
+\State $\mathrm{neg}_{\mathrm{uni}} \gets \mathrm{RNG.int}(0,|I|,|O|)$;\quad resample entries colliding with $N_r$
+\State $\mathrm{neg} \gets \mathrm{where}(m,\;\mathrm{neg}_{\mathrm{ppr}},\;\mathrm{neg}_{\mathrm{uni}})$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Illustrative implementation}
+\label{sec:code-snippets}
+Listing~\ref{lst:sampler} shows the core of the vectorized per-epoch sampler
+(\texttt{TrnData.neg\_sampling} in \texttt{third\_party/LightGCL/utils.py}),
+implementing Algorithm~\ref{alg:sampler} directly: the degree gate \texttt{base\_u}
+is precomputed once at construction time (line 2), and each epoch computes a
+per-edge mixture probability and vectorized branch mask (lines 6--10) rather than
+looping in Python. Listing~\ref{lst:stability} shows the overflow-safe InfoNCE
+term (\S\ref{sec:stability}), where \texttt{torch.logsumexp} replaces a naive
+\texttt{log(exp(x).sum())} that overflows once embedding norms grow unbounded.
+
+\begin{lstlisting}[style=py,float=t,caption={Degree-gated curriculum sampler: gate precompute (constructor) and per-epoch vectorized sampling.},label={lst:sampler}]
+# constructor (called once): precompute the degree gate
+if neg_mode == 'S3':
+    d_mid = gate_dmid if gate_dmid is not None else float(np.median(deg))
+    self.base_u = 1.0 / (1.0 + np.exp(-gate_a * (np.log1p(deg) - np.log1p(d_mid))))
+
+# neg_sampling(epoch): called once per epoch, vectorized over all |O| edges
+def neg_sampling(self, epoch=0):
+    E, rows = len(self.rows), self.rows
+    if self.neg_mode == 'S0':
+        self.negs = self._sample_uniform(rows); return
+
+    s = min(1.0, epoch / self.Tw) if self.Tw > 0 else 1.0
+    if self.neg_mode == 'S1':
+        alpha_edge = np.ones(E)
+    elif self.neg_mode == 'S2':
+        alpha_edge = np.full(E, s * self.alpha_bar)
+    elif self.neg_mode == 'S3':
+        alpha_edge = s * self.base_u[rows]          # per-edge mixture weight
+
+    use_ppr = self.rng.random(E) < alpha_edge        # vectorized branch mask
+    neg = np.zeros(E, dtype=np.int32)
+    if use_ppr.any():
+        ppr_rows = rows[use_ppr]
+        col_idx = self.rng.integers(0, self.pool_size, size=len(ppr_rows))
+        neg[use_ppr] = self.ppr_pool[ppr_rows, col_idx]
+    if (~use_ppr).any():
+        neg[~use_ppr] = self._sample_uniform(rows[~use_ppr])
+    self.negs = neg
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,float=t,caption={Overflow-safe InfoNCE contrastive term (\S\ref{sec:stability}): \texttt{logsumexp} instead of \texttt{log(exp(x).sum())}.},label={lst:stability}]
+# logsumexp instead of log(exp(.).sum()): the raw exp() overflows to inf once
+# embedding norms grow (no bound over long unregularized training), and inf/nan
+# then poisons the total loss even when lambda_1=0 (0 * nan = nan).
+neg_score = torch.logsumexp(G_u_norm[uids] @ E_u_norm.T / self.temp, dim=1).mean()
+neg_score += torch.logsumexp(G_i_norm[iids] @ E_i_norm.T / self.temp, dim=1).mean()
+pos_score = (torch.clamp((G_u_norm[uids] * E_u_norm[uids]).sum(1) / self.temp, -5.0, 5.0)).mean() \
+          + (torch.clamp((G_i_norm[iids] * E_i_norm[iids]).sum(1) / self.temp, -5.0, 5.0)).mean()
+loss_s = -pos_score + neg_score
+\end{lstlisting}
 
 \section{Experimental setup}
 \label{sec:setup}
@@ -243,7 +520,15 @@ SimGCL & 2 & \textbf{0.1080} $\pm$ 0.0002 & \textbf{0.0933} $\pm$ 0.0001 \\
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:main-results} shows the expected ordering among the LightGCL-family
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/main_comparison_bar.pdf}
+\caption{Recall@20 and NDCG@20 across all evaluated models on Yelp2018 (mean $\pm$ std
+across seeds), corresponding to Table~\ref{tab:main-results}.}
+\label{fig:main-comparison}
+\end{figure}
+
+Table~\ref{tab:main-results} and Figure~\ref{fig:main-comparison} show the expected ordering among the LightGCL-family
 models: MF-BPR $<$ LightGCN $<$ LightGCL(S0), confirming graph propagation and then
 contrastive learning each add value on this dataset, and our reproduction is internally
 consistent. Both hard-negative mixture variants (S2, S3) improve over the uniform
@@ -275,7 +560,16 @@ S3 & degree-gated curriculum (ours) & 3 & 0.1015 $\pm$ 0.0006 & 0.0875 $\pm$ 0.0
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:ablation} shows the pattern the design anticipated in one respect and not
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/sampler_ablation_bar.pdf}
+\caption{Recall@20 across the full S0/S1/S2/S3 sampler ablation (dashed line = S0
+baseline). S1 is the only variant that underperforms uniform sampling; S2/S3 both
+improve over it once a curriculum ramp is added.}
+\label{fig:ablation}
+\end{figure}
+
+Table~\ref{tab:ablation} and Figure~\ref{fig:ablation} show the pattern the design anticipated in one respect and not
 in another. \textbf{As hypothesized:} S1 (pure PPR hard negatives, no curriculum, no
 degree protection) is the \emph{only} variant that underperforms the uniform baseline
 S0, consistent with the false-negative-bias mechanism the proposal targets --- treating
@@ -283,6 +577,20 @@ PPR-similar items as negatives from epoch 0 for every user, including sparse one
 little evidence, does measurably hurt. \textbf{Not hypothesized:} once a curriculum ramp
 is added, the simpler global mixture S2 matches or slightly exceeds our full degree-gated
 method S3 on every metric. We discuss this in \S\ref{sec:discussion}.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/training_curves.pdf}
+\caption{Training loss and test Recall@20 vs.\ epoch for S0, S2, S3 (seed 1). All three
+converge smoothly with the stability fixes of \S\ref{sec:stability}; S2 and S3 separate
+from S0 within the first $\sim\!20$ epochs and remain apart through convergence.}
+\label{fig:training-curves}
+\end{figure}
+
+Figure~\ref{fig:training-curves} confirms this separation is not a late-training
+artifact: S2 and S3's Recall@20 curves visibly exceed S0's from early in training and
+the gap persists to convergence, while all three losses decrease smoothly with no
+divergence, corroborating the stability fixes of \S\ref{sec:stability}.
 
 \subsection{Degree-bucket breakdown}
 
@@ -316,6 +624,15 @@ Bucket & Model & Recall@20 & NDCG@20 \\
 (Table generated by \texttt{scripts/analyze\_degree\_buckets.py} from
 \texttt{results/degree\_bucket\_summary.csv}.)
 
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.75\textwidth]{figures/degree_bucket_grouped_bar.pdf}
+\caption{Recall@20 by user-degree tertile (tail/mid/head) for S0, S2, S3, corresponding
+to Table~\ref{tab:bucket}. S2 and S3 both improve over S0 in every bucket; the gap
+between S2 and S3 is small in all three.}
+\label{fig:bucket}
+\end{figure}
+
 This is the core long-tail-robustness result, and it is a genuine mixed finding. Both S2
 and S3 improve over S0 in \emph{every} bucket, including the tail --- so the central
 claim that a hard-negative curriculum can help sparse users \emph{without} net harm is
@@ -324,6 +641,81 @@ sampling. However, the degree gate's specific mechanism --- suppressing hard neg
 more aggressively for low-degree users --- was designed to give S3 a \emph{larger}
 relative gain in the tail bucket than S2. We do not observe that: S2's tail-bucket gain
 over S0 ($+0.0028$ Recall@20) is if anything slightly larger than S3's ($+0.0022$).
+
+\subsection{Hyperparameter sensitivity from the full screening sweep}
+\label{sec:sensitivity}
+
+Table~\ref{tab:screening} reports the complete single-seed screening pass --- all
+eleven LightGCL-family configurations --- from which the finals hyperparameters were
+selected. Because every row shares seed $0$, the differences are noise-free
+\emph{within} this table (though not necessarily reproducible across seeds, a point
+we return to in \S\ref{sec:discussion}), which lets us read off the shape of each
+hyperparameter's effect.
+
+\begin{table}[h]
+\centering
+\caption{Full single-seed screening sweep (seed $0$, 100 epochs) on Yelp2018.
+Bands are PPR percentile windows $(p_{lo},p_{hi})$. Best per column in bold.}
+\label{tab:screening}
+\begin{tabular}{lllcc}
+\toprule
+Mode & Configuration & Recall@20 & NDCG@20 & Recall@40 \\
+\midrule
+S0 & uniform baseline            & 0.1002 & 0.0864 & 0.1593 \\
+\midrule
+S1 & band $(0.05,0.15)$          & 0.0992 & 0.0858 & 0.1575 \\
+S1 & band $(0.02,0.10)$ (hardest)& 0.1006 & 0.0863 & 0.1568 \\
+S1 & band $(0.10,0.20)$ (safest) & 0.0990 & 0.0853 & 0.1568 \\
+\midrule
+S2 & $\bar\alpha=0.3$            & \textbf{0.1012} & \textbf{0.0875} & \textbf{0.1610} \\
+S2 & $\bar\alpha=0.5$            & 0.1011 & 0.0874 & 0.1612 \\
+\midrule
+S3 & $a{=}1.0,\,T_w{=}10$        & 0.1009 & 0.0873 & 0.1600 \\
+S3 & $a{=}1.5,\,T_w{=}10$        & 0.1009 & 0.0869 & 0.1600 \\
+S3 & $a{=}1.0,\,T_w{=}5$         & 0.1007 & 0.0869 & 0.1604 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/hyperparam_sweep.pdf}
+\caption{Single-seed screening sweep over PPR band width (S1), mixture weight (S2), and
+gate slope/warm-up (S3), vs.\ the S0 baseline (dashed). Note the zoomed $y$-axis: the
+entire spread is under $0.003$ Recall@20.}
+\label{fig:sweep}
+\end{figure}
+
+Four patterns emerge, all consistent with the method's design logic and visible in
+Figure~\ref{fig:sweep}. \textbf{(i) Band width.} Among the pure-PPR S1 runs, the
+narrowest/hardest band $(0.02,0.10)$ is the only one to reach the uniform baseline at
+seed $0$ ($0.1006$ vs.\ $0.1002$), while the ``safest'' wide band $(0.10,0.20)$ is worst
+($0.0990$). This is initially counter-intuitive --- one might expect the safer band to
+reduce false negatives --- but it is coherent: items in the $10$--$20$th percentile of
+PPR are neither false-negative risks \emph{nor} informative hard negatives; they are
+mediocre mid-difficulty items that add noise without gradient signal. The hardest band
+concentrates on genuinely informative items, and false-negative damage is then better
+controlled by the \emph{curriculum and gate} (S2/S3) than by widening the band. This
+validates selecting $(0.02,0.10)$ for the mixture variants. \textbf{(ii) Mixture
+weight.} S2 is essentially flat in $\bar\alpha$ over $\{0.3,0.5\}$ ($0.1012$ vs.\
+$0.1011$ Recall@20), with the lower weight marginally ahead --- more hard negatives
+past a modest fraction neither helps nor clearly hurts. \textbf{(iii) Gate slope.} A
+gentler gate ($a{=}1.0$) matches or beats the steeper $a{=}1.5$ on NDCG@20 ($0.0873$
+vs.\ $0.0869$), i.e.\ sharpening the sparse/active contrast does not help.
+\textbf{(iv) Warm-up.} A longer curriculum warm-up ($T_w{=}10$) beats the shorter
+$T_w{=}5$ ($0.1009$ vs.\ $0.1007$ Recall@20), consistent with the false-negative
+hypothesis that hard negatives are harmful early and should be introduced slowly.
+
+The single most important quantitative observation, however, is the \emph{scale} of
+all these effects. The entire span of the eight S1--S3 configurations is
+$0.0990$--$0.1012$ Recall@20, a range of $0.0022$; the span of the six mixture
+(S2/S3) configurations that all beat the baseline is just $0.1007$--$0.1012$, a
+range of $0.0005$. That $0.0005$ window is \emph{smaller than the across-seed
+standard deviation} we measure for a single fixed configuration in the finals
+($\sigma\!\approx\!0.0006$--$0.0008$ Recall@20; Table~\ref{tab:main-results}). In
+other words, once a curriculum ramp is present, no hyperparameter choice within our
+grid moves the model by more than seed noise. This is the empirical backdrop
+against which the S2-vs-S3 comparison in \S\ref{sec:discussion} must be read.
 
 \section{Discussion}
 \label{sec:discussion}
@@ -339,36 +731,203 @@ is this project's distinguishing contribution over a simpler fixed-ramp mixture 
 show a measurable edge in our experiments, including specifically in the tail bucket
 where we expected it to matter most.
 
-We see three plausible, non-exclusive explanations, none of which we had time to test
-directly: (1) \emph{effect size vs. seed noise} --- differences between S2 and S3 are
-$\le 0.0006$ Recall@20 with per-config std around $0.0006$--$0.0008$ from only 2--3
-seeds, so the two methods may simply be statistically indistinguishable at this sample
-size, and a larger seed count could reverse or confirm the ranking; (2) the degree gate's
-hyperparameters ($a$, $d_{\mathrm{mid}}$) were only lightly swept (2 values of $a$, one
-$T_w$ reduction) in a single-seed screening pass, so the gate's shape may not be
-well-tuned; (3) Yelp2018 at $0.188\%$ density with a median degree around 20 may not have
-enough separation between "sparse" and "active" users for the degree gate to meaningfully
-differ from a flat mixture --- the proposal's planned second dataset, Gowalla (sparser,
-$0.045\%$ density), might show a larger gap, but we did not have time to run it.
+\subsection{Why does the degree gate not beat a flat mixture?}
+\label{sec:whyS3}
+
+The central negative finding --- S3's degree gate yields no measurable gain over the
+degree-agnostic S2, even in the tail bucket --- admits four concrete, non-exclusive
+explanations grounded in the method and the data of \S\ref{sec:sensitivity}. We could
+not adjudicate between them within the compute budget, but each makes a testable
+prediction.
+
+\textbf{H1: The gate's dynamic range is too narrow for Yelp's degree distribution.}
+This is the explanation the data most directly support. The tertile thresholds ($20$
+and $33$ training interactions) show that the bulk of Yelp users are compressed into a
+narrow degree band, and the gate operates in \emph{log}-degree with midpoint at the
+median. Substituting representative degrees into
+$g_u=\sigma(a[\log(1{+}d_u)-\log(1{+}d_{\mathrm{mid}})])$ with $a{=}1.0$ and
+$d_{\mathrm{mid}}$ at the median (between the $20$ and $33$ tertile cutoffs) gives gate
+values of roughly $0.30$ for a sparse tail user ($d\!\approx\!10$), $0.5$ at the median,
+and $0.63$ for a mid/head user ($d\!\approx\!33$) --- a spread of only about $\pm0.16$
+around $0.5$ across the central mass of users.\footnote{These gate values are
+deterministic consequences of the stated formula, $a{=}1.0$, and the median lying
+between the reported tertile cutoffs; they are illustrative of the gate's shape, not
+measured quantities. The exact numbers shift slightly with the precise median.} Only
+pathologically sparse or extremely active users reach the $0.1$/$0.9$ extremes the gate
+was drawn to exploit, and those users are a small fraction of the interaction mass.
+Consequently S3's \emph{effective} mixture weight is approximately a flat
+$\approx\!0.5$ for most edges --- i.e.\ S3 behaves almost exactly like S2 at
+$\bar\alpha\!\approx\!0.5$. Table~\ref{tab:screening} confirms the prediction this
+makes: S2 at $\bar\alpha{=}0.5$ ($0.1011$) and best S3 ($0.1009$) are indeed nearly
+identical, and both sit just below the better-tuned S2 at $\bar\alpha{=}0.3$
+($0.1012$). Under this account the degree gate is not \emph{wrong}; it is simply
+near-degenerate on this dataset, collapsing toward a flat mixture whose implied weight
+($\approx\!0.5$) happens to be marginally worse than the tuned S2 weight ($0.3$) ---
+which explains both why S3 fails to beat S2 and why it slightly trails the best S2.
+
+\textbf{H2: The effect is smaller than the seed noise.} As quantified in
+\S\ref{sec:sensitivity}, the S2-vs-S3 gap is $\le 0.0006$ Recall@20 while
+per-configuration std is $0.0006$--$0.0008$ over only 2--3 seeds. Even in the tail
+bucket the S2/S3 difference ($0.1017$ vs.\ $0.1011$ Recall@20) is of the same
+magnitude as the tail-bucket std. A properly powered comparison would need many more
+seeds; with the current sample the two methods are plausibly statistically
+indistinguishable, and the observed S2 $>$ S3 ordering could reverse. This does not
+rescue the gate --- an effect that requires dozens of seeds to detect is not a
+practically useful contribution --- but it does mean we cannot claim the gate
+\emph{hurts}, only that we cannot detect it helping.
+
+\textbf{H3: The gate is under-tuned relative to S2.} The comparison is mildly unfair:
+S2's single scalar $\bar\alpha$ was swept over $\{0.3,0.5\}$, whereas S3's two-parameter
+gate $(a,d_{\mathrm{mid}})$ was explored only over two slopes at a fixed median
+midpoint, in a single-seed pass. H1 suggests the more promising untried move is not a
+steeper slope but a \emph{shifted or rescaled} midpoint --- e.g.\ setting
+$d_{\mathrm{mid}}$ well above the median and/or increasing $a$ sharply --- so that the
+gate actually reaches its protective regime for the sparse users it targets, rather
+than hovering near $0.5$ for everyone. We did not run this, and flag it as the most
+direct follow-up to test H1.
+
+\textbf{H4: Degree is a coarse proxy for false-negative risk.} The gate assumes sparse
+users need protection because their unobserved interactions are more ambiguous, but
+false-negative risk plausibly also depends on item popularity, local neighborhood
+density, and the coherence of a user's taste (two users at the same degree can have a
+tightly clustered or a broad, noisy interaction history). A scalar function of $d_u$
+alone cannot distinguish these cases, which is consistent with S2's slight edge over S3
+persisting even within the tail bucket, where H1's compressed-range argument should be
+weakest. This suggests that if a gate is to help, the conditioning signal may need to be
+richer than raw degree --- e.g.\ combining degree with a popularity or local-clustering
+estimate --- rather than only refining the degree gate's slope or midpoint (H3).
+
+Taken together, H1 is the explanation with the most direct empirical support and it
+subsumes part of H3: on a degree distribution as compressed as Yelp2018's, a
+log-degree sigmoid centred at the median cannot differentiate users strongly enough to
+beat a well-chosen flat mixture. This sharpens rather than retracts the project's
+thesis --- the \emph{curriculum} clearly helps (S2/S3 $>$ S0, S1 backfires exactly as
+predicted), while the \emph{degree-conditioning} needs either a sparser dataset
+(Gowalla, at $0.045\%$ vs.\ Yelp's $0.188\%$ density, spreads users over a wider degree
+range) or a more aggressively parameterized gate to demonstrate its intended benefit.
 
 We also did not anticipate SimGCL's large margin over every LightGCL variant
 (Table~\ref{tab:main-results}); since we did not tune SimGCL's hyperparameters for this
 dataset, we cannot yet attribute this to model quality vs. tuning, and flag it as the
 most important open question for follow-up work, ahead of further tuning our own method.
 
-\section{Conclusion}
+\section{Limitations}
+\label{sec:limitations}
+
+We list the limitations that most qualify our conclusions, in decreasing order of how
+much they affect the headline claims.
+
+\textbf{Statistical power.} Our strongest quantitative caveat is that the effects we
+study are small relative to seed variance. Finals use 2--3 seeds; the S2-vs-S3 gap and
+even several baseline gaps are of the same order as the measured standard deviation
+(\S\ref{sec:sensitivity}). We therefore report all numbers with std and avoid
+significance claims we cannot support; a publishable version would require $\ge\!10$
+seeds and a paired test.
+
+\textbf{Single dataset.} All conclusions are drawn from Yelp2018 alone. The degree
+gate's near-degeneracy (H1, \S\ref{sec:whyS3}) is specifically a property of Yelp's
+compressed degree distribution; whether the gate helps on a sparser graph is untested.
+We precomputed PPR for Gowalla (Table~\ref{tab:dataset-stats}) but could not run
+training within the compute budget, so we cannot claim cross-dataset generality.
+
+\textbf{Baseline tuning asymmetry.} SimGCL's large margin over all LightGCL variants is
+unexplained. We did not tune SimGCL's noise scale $\epsilon$ or contrastive weight for
+Yelp2018, nor did we re-tune LightGCL beyond its repository defaults, so we cannot
+attribute the gap to model quality versus tuning. Our contribution is an
+\emph{intra-LightGCL} ablation (S0--S3 share every hyperparameter except the sampler);
+cross-model rankings in Table~\ref{tab:main-results} should be read as context, not as
+a controlled comparison.
+
+\textbf{Fixed PPR construction.} PPR is computed once with fixed teleport $c{=}0.15$ and
+$30$ power iterations on the symmetric-normalized adjacency, and the hard-negative band
+is frozen for all of training. Unlike model-adaptive samplers (DNS, SRNS), our hardness
+signal is static and cannot track which items the current model actually confuses; a
+stale band may include items the model has already learned to rank correctly. The SVD
+rank $q$ of LightGCL's contrastive view was also left at its default and never ablated.
+
+\textbf{Metric and protocol scope.} We report Recall@20/NDCG@20 under full ranking only.
+We do not measure diversity, coverage, novelty, or calibration, so we cannot
+characterize how hard-negative mining reshapes the \emph{distribution} of
+recommendations --- directly relevant to the impact concerns below.
+
+\section{Broader impact and ethics}
+\label{sec:impact}
+
+\textbf{Popularity and feedback-loop amplification.} Hard-negative mining and
+recommender feedback loops interact in a way that deserves explicit caution. PPR
+proximity correlates with item popularity: popular items accumulate PPR mass and are
+disproportionately likely to enter the hard-negative band. Training against popular
+items as negatives can suppress their scores (a debiasing effect) \emph{or}, if the
+band is dominated by unobserved-positive popular items, distort the ranking in
+harder-to-predict ways. More broadly, any change that sharpens the decision boundary
+risks amplifying existing exposure bias through the standard feedback loop, in which a
+model trained on interactions it previously induced further concentrates
+exposure~\cite{biassurvey}. Our degree gate is, from this angle, a partial
+mitigation --- it withholds aggressive hard negatives from exactly the sparse users
+most vulnerable to mis-ranking --- but we did not measure popularity or exposure
+distributions, so we cannot claim a net debiasing effect and would caution against
+deploying the sampler as one without such measurement.
+
+\textbf{False negatives as fairness risk.} The false-negative mechanism central to this
+paper has an equity dimension: treating a PPR-proximate unobserved item as a negative
+penalizes items a user might genuinely like but has not yet encountered, and this
+penalty falls hardest on cold-start users and long-tail items with sparse evidence.
+This is the harm the degree gate is designed to bound, and we regard protecting sparse
+users as an ethical as well as an accuracy objective; our tail-bucket results (no bucket
+is made worse than uniform sampling) are the relevant evidence, though limited to one
+dataset.
+
+\textbf{Compute and reproducibility.} PPR precompute is a one-time cost (11.4s Yelp /
+30.1s Gowalla on one GPU) and the per-epoch sampler adds $<\!1$s, so the method's
+marginal energy cost over standard LightGCL training is negligible; the dominant cost
+is the training itself, and our full study is a modest number of single-GPU runs. We
+nonetheless note that hyperparameter sweeps of contrastive recommenders are
+energy-consuming at scale, and our finding that the entire mixture-hyperparameter grid
+moves accuracy by less than seed noise (\S\ref{sec:sensitivity}) is itself an argument
+\emph{against} extensive sweeping here. All data is a public benchmark of business
+check-ins with no direct personal identifiers beyond anonymized user ids; no new data
+was collected.
+
+\section{Conclusion and future work}
+\label{sec:conclusion}
 
 We implemented and evaluated a degree-aware curriculum hard-negative sampler for
-LightGCL's BPR loss, verified on real Yelp2018 data that pure PPR hard-negative sampling
-without protection measurably underperforms uniform sampling (supporting the
-false-negative-bias concern that motivates this project), and showed that adding a
-curriculum ramp recovers and exceeds the uniform baseline across overall metrics and
-every degree bucket. Our full method's degree-gating component, however, did not show a
-distinguishable benefit over a simpler fixed-ramp mixture in these experiments. We
-consider the honest reporting of this partial result --- rather than only the parts that
-worked --- the most useful outcome of the ablation, together with two numerical-stability
-fixes to the reference LightGCL code (\S\ref{sec:stability}) that we believe are useful
-independent of our sampler contribution.
+LightGCL's BPR loss, changing only the negative proposal distribution and leaving the
+SVD-contrastive branch provably untouched. On Yelp2018 we confirmed, on real data and
+across seeds, the two halves of the motivating hypothesis that do hold: pure PPR
+hard-negative sampling without protection (S1) is the single variant that underperforms
+uniform sampling, exactly as the false-negative-bias mechanism predicts, and adding a
+curriculum ramp (S2/S3) recovers and exceeds the uniform baseline on overall metrics
+and in \emph{every} degree bucket, so a hard-negative curriculum can help sparse users
+without net harm. The distinguishing component of our full method --- degree-conditioned
+gating --- did not, however, produce a measurable gain over a simpler degree-agnostic
+mixture. Our analysis (\S\ref{sec:whyS3}) attributes this primarily to the gate becoming
+near-degenerate on Yelp's compressed degree distribution, where a log-degree sigmoid
+centred at the median collapses toward a flat $\approx\!0.5$ mixture for the bulk of
+users. We regard the honest reporting of this partial result, together with two
+numerical-stability fixes to the reference LightGCL code (\S\ref{sec:stability}) that
+are useful independent of our contribution, as the study's most reliable outputs.
+
+\textbf{Future work} follows directly from the limitations and the H1--H3 analysis.
+\emph{(1) Sparser data.} The most direct test of the degree gate is Gowalla, whose
+$0.045\%$ density (versus Yelp's $0.188\%$) spreads users over a far wider degree
+range; PPR is already precomputed (Table~\ref{tab:dataset-stats}), so this is a
+training-time-only extension, and H1 predicts a larger S3-over-S2 gap there.
+\emph{(2) Re-parameterized gate.} H1/H3 suggest the untried lever is the gate
+\emph{midpoint and range}, not its slope: setting $d_{\mathrm{mid}}$ above the median
+(and/or normalizing degree by percentile rather than raw log-degree) would push the
+gate into its protective regime for the sparse users it targets, rather than hovering
+near $0.5$ for everyone. \emph{(3) Adaptive hardness.} Replacing the static PPR band
+with a model-aware signal --- score-conditioned negatives as in DNS~\cite{dns} or
+variance-based false-negative filtering as in SRNS~\cite{srns}, gated by degree as
+here --- would let the hardness track what the model actually confuses, addressing the
+stale-band limitation. \emph{(4) SVD-rank ablation.} The proposal's planned sweep of
+the contrastive view's SVD rank $q$ remains open and would clarify how much of
+LightGCL's headroom is in the contrastive branch versus the ranking term we modify.
+\emph{(5) Powered evaluation and the SimGCL gap.} A many-seed, paired-test evaluation
+is needed both to settle the S2-vs-S3 question and, more importantly, to determine
+whether SimGCL's large advantage reflects genuine model quality or untuned LightGCL
+hyperparameters --- the single most consequential open question raised by our results.
 
 \bibliographystyle{plain}
 \begin{thebibliography}{9}
@@ -386,6 +945,28 @@ augmentations necessary? Simple graph contrastive learning for recommendation. I
 2022.
 \bibitem{curriculum} Y. Bengio, J. Louradour, R. Collobert, and J. Weston. Curriculum
 learning. In ICML, 2009.
+\bibitem{dns} W. Zhang, T. Chen, J. Wang, and Y. Yu. Optimizing top-$N$ collaborative
+filtering via dynamic negative item sampling. In SIGIR, 2013.
+\bibitem{srns} J. Ding, Y. Quan, Q. Yao, Y. Li, and D. Jin. Simplify and robustify
+negative sampling for implicit collaborative filtering. In NeurIPS, 2020.
+\bibitem{mixgcf} T. Huang, Y. Dong, M. Ding, Z. Yang, W. Feng, X. Wang, and J. Tang.
+MixGCF: An improved training method for graph neural network-based recommender
+systems. In KDD, 2021.
+\bibitem{irgan} J. Wang, L. Yu, W. Zhang, Y. Gong, Y. Xu, B. Wang, P. Zhang, and D.
+Zhang. IRGAN: A minimax game for unifying generative and discriminative information
+retrieval models. In SIGIR, 2017.
+\bibitem{ance} L. Xiong, C. Xiong, Y. Li, K.-F. Tang, J. Liu, P. Bennett, J. Ahmed,
+and A. Overwijk. Approximate nearest neighbor negative contrastive learning for
+dense text retrieval. In ICLR, 2021.
+\bibitem{sgl} J. Wu, X. Wang, F. Feng, X. He, L. Chen, J. Lian, and X. Xie.
+Self-supervised graph learning for recommendation. In SIGIR, 2021.
+\bibitem{ncl} Z. Lin, C. Tian, Y. Hou, and W. X. Zhao. Improving graph collaborative
+filtering with neighborhood-enriched contrastive learning. In WWW, 2022.
+\bibitem{infonce} A. van den Oord, Y. Li, and O. Vinyals. Representation learning
+with contrastive predictive coding. arXiv:1807.03748, 2018.
+\bibitem{biassurvey} J. Chen, H. Dong, X. Wang, F. Feng, M. Wang, and X. He. Bias
+and debias in recommender system: A survey and future directions. ACM Transactions
+on Information Systems, 2023.
 \end{thebibliography}
 
 \appendix

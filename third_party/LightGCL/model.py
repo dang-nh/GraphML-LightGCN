@@ -4,6 +4,30 @@ from utils import sparse_dropout, spmm
 import torch.nn.functional as F
 
 class LightGCL(nn.Module):
+    """LightGCL: LightGCN message passing contrasted against a truncated-SVD global view.
+
+    Two embedding views are propagated over ``l`` layers: the main LightGCN view
+    ``E_u``/``E_i`` (symmetric-normalized adjacency ``adj_norm``, used for ranking) and
+    an SVD-reconstructed view ``G_u``/``G_i`` (via the precomputed rank-q factors
+    ``u_mul_s``, ``v_mul_s``, ``ut``, ``vt``), aligned with an InfoNCE contrastive loss.
+    Only the main view ``E_u``/``E_i`` ever feeds the ranking score, so changing the BPR
+    negative sampler (this project's contribution) cannot affect the contrastive branch.
+
+    Args:
+        n_u, n_i: number of users / items.
+        d: embedding dimension.
+        u_mul_s, v_mul_s, ut, vt: precomputed truncated-SVD factors of the normalized
+            adjacency (``u_mul_s = U_q Sigma_q``, ``ut = U_q^T``, symmetrically for items).
+        train_csr: CSR training interaction matrix, used to mask seen items at test time.
+        adj_norm: symmetric-normalized sparse adjacency for LightGCN propagation.
+        l: number of propagation layers.
+        temp: InfoNCE temperature.
+        lambda_1, lambda_2: contrastive loss weight and L2 weight-decay coefficient.
+        dropout: edge dropout probability applied to ``adj_norm`` during training.
+        batch_user: batch size used when scoring all items at test time.
+        device: torch device.
+    """
+
     def __init__(self, n_u, n_i, d, u_mul_s, v_mul_s, ut, vt, train_csr, adj_norm, l, temp, lambda_1, lambda_2, dropout, batch_user, device):
         super(LightGCL,self).__init__()
         self.E_u_0 = nn.Parameter(nn.init.xavier_uniform_(torch.empty(n_u,d)))
@@ -40,6 +64,13 @@ class LightGCL(nn.Module):
         self.device = device
 
     def forward(self, uids, iids, pos, neg, test=False):
+        """Test mode: rank all items for a batch of users, masking seen training items.
+        Train mode: propagate both views for ``l`` layers and return the total loss
+        (``loss = loss_r + lambda_1*loss_s + lambda_2*loss_reg``) plus its BPR
+        (``loss_r``) and contrastive (``loss_s``) components, given a batch of
+        ``(uids, iids)`` positive edges and one sampled ``neg`` item per edge (the
+        negative sampler in ``utils.TrnData.neg_sampling`` controls the distribution of
+        ``neg``; nothing else in this forward pass changes with the sampler)."""
         if test==True:  # testing phase
             preds = self.E_u[uids] @ self.E_i.T
             mask = self.train_csr[uids.cpu().numpy()].toarray()
